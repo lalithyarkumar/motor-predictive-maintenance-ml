@@ -15,7 +15,7 @@ st.set_page_config(
 # Load trained model
 @st.cache_resource
 def load_model():
-    package = joblib.load("model/motor_bearing_model.joblib")
+    package = joblib.load("motor_bearing_model.joblib")
     return package
 
 try:
