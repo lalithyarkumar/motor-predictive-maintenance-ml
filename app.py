@@ -5,18 +5,15 @@ import pandas as pd
 import joblib
 import matplotlib.pyplot as plt
 
-# Page configuration
 st.set_page_config(
     page_title="Motor Predictive Maintenance",
     page_icon="⚙️",
     layout="wide"
 )
 
-# Load trained model
 @st.cache_resource
 def load_model():
-    package = joblib.load("motor_bearing_model.joblib")
-    return package
+    return joblib.load("motor_bearing_model.joblib")
 
 try:
     package = load_model()
@@ -28,12 +25,12 @@ except Exception as e:
     st.error(f"Could not load model: {e}")
     st.stop()
 
-# Dashboard title
 st.title("⚙️ Motor Predictive Maintenance")
 st.subheader("Machine Learning-Based Bearing Fault Detection")
 
 st.write(
-    "Upload vibration data to identify possible motor bearing conditions."
+    "Upload one or more vibration CSV files "
+    "to identify possible motor bearing conditions."
 )
 
 st.info(
@@ -41,62 +38,70 @@ st.info(
     "Live ESP32 sensor integration is planned as a future extension."
 )
 
-# Sidebar
 st.sidebar.header("Project Information")
 st.sidebar.write("Algorithm: Random Forest")
-st.sidebar.write("Dataset: Case Western Reserve University (CWRU)")
+st.sidebar.write("Dataset: CWRU Bearing Dataset")
 st.sidebar.write(f"Window size: {segment_size} samples")
 
-# Upload vibration data
-uploaded_file = st.file_uploader(
-    "Upload vibration data (CSV)",
-    type=["csv"]
+uploaded_files = st.file_uploader(
+    "Upload multiple vibration CSV files",
+    type=["csv"],
+    accept_multiple_files=True
 )
 
-if uploaded_file is not None:
-    try:
-        df = pd.read_csv(uploaded_file)
+def extract_features(signal):
+    features_list = []
 
-        st.subheader("Uploaded Data")
-        st.dataframe(df.head())
+    for start in range(0, len(signal) - segment_size + 1, segment_size):
+        segment = signal[start:start + segment_size]
 
-        # Select signal column
-        signal_column = st.selectbox(
-            "Select the vibration signal column",
-            df.columns
-        )
+        features_list.append({
+            "Mean": np.mean(segment),
+            "Standard Deviation": np.std(segment),
+            "RMS": np.sqrt(np.mean(segment ** 2)),
+            "Variance": np.var(segment),
+            "Peak Amplitude": np.max(np.abs(segment))
+        })
 
-        signal = pd.to_numeric(
-            df[signal_column],
-            errors="coerce"
-        ).dropna().to_numpy()
+    return pd.DataFrame(features_list)[feature_names]
 
-        if len(signal) < segment_size:
-            st.warning(
-                f"Please upload at least {segment_size} valid samples."
+
+if uploaded_files:
+
+    summary = []
+
+    for i, uploaded_file in enumerate(uploaded_files):
+
+        st.divider()
+        st.header(f"Dataset: {uploaded_file.name}")
+
+        try:
+            df = pd.read_csv(uploaded_file)
+
+            numeric_columns = df.select_dtypes(
+                include=np.number
+            ).columns.tolist()
+
+            if not numeric_columns:
+                st.error("No numeric vibration column found.")
+                continue
+
+            signal_column = st.selectbox(
+                "Select vibration signal column",
+                numeric_columns,
+                key=f"column_{i}"
             )
-        else:
-            # Divide signal into segments
-            features_list = []
 
-            for start in range(0, len(signal) - segment_size + 1, segment_size):
-                segment = signal[start:start + segment_size]
+            signal = df[signal_column].dropna().to_numpy()
 
-                features_list.append({
-                    "Mean": np.mean(segment),
-                    "Standard Deviation": np.std(segment),
-                    "RMS": np.sqrt(np.mean(segment ** 2)),
-                    "Variance": np.var(segment),
-                    "Peak Amplitude": np.max(np.abs(segment))
-                })
+            if len(signal) < segment_size:
+                st.warning(
+                    f"Need at least {segment_size} valid samples."
+                )
+                continue
 
-            feature_df = pd.DataFrame(features_list)
-            feature_df = feature_df[feature_names]
-
-            # Prediction
+            feature_df = extract_features(signal)
             predictions = model.predict(feature_df)
-
-            st.subheader("Prediction Results")
 
             counts = pd.Series(predictions).value_counts()
 
@@ -107,30 +112,43 @@ if uploaded_file is not None:
                 "Number of Segments": counts.values
             })
 
+            st.subheader("Prediction Results")
             st.dataframe(results, use_container_width=True)
 
-            st.subheader("Prediction Distribution")
+            predicted_condition = class_names[
+                int(pd.Series(predictions).mode()[0])
+            ]
 
-            chart_data = results.set_index("Bearing Condition")
-            st.bar_chart(chart_data)
+            summary.append({
+                "Dataset": uploaded_file.name,
+                "Predicted Condition": predicted_condition,
+                "Segments Analysed": len(predictions)
+            })
 
             st.subheader("Vibration Signal")
 
-            fig, ax = plt.subplots(figsize=(12, 4))
+            fig, ax = plt.subplots(figsize=(12, 3))
             ax.plot(signal[:min(len(signal), 5000)])
             ax.set_xlabel("Sample Number")
             ax.set_ylabel("Amplitude")
-            ax.set_title("Vibration Signal")
+            ax.set_title(uploaded_file.name)
             ax.grid(True)
-
             st.pyplot(fig)
+            plt.close(fig)
 
             st.success(
-                f"Successfully analyzed {len(predictions)} vibration segments."
+                f"Successfully analysed {len(predictions)} segments."
             )
 
-    except Exception as e:
-        st.error(f"Error processing the uploaded file: {e}")
+        except Exception as e:
+            st.error(f"Error processing {uploaded_file.name}: {e}")
+
+    if summary:
+        st.divider()
+        st.header("Overall Dataset Comparison")
+
+        summary_df = pd.DataFrame(summary)
+        st.dataframe(summary_df, use_container_width=True)
 
 else:
-    st.warning("Upload a CSV vibration signal to begin analysis.")
+    st.warning("Please upload one or more vibration CSV files.")
